@@ -1,40 +1,19 @@
-# Workspace
+# Used Car Price Predictor
 
-## Overview
+College PSDL project. Predicts resale prices for used cars in India using machine learning.
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+## Architecture
+- **Flask Backend** (`backend/app.py`, port 5000) — RandomForestRegressor trained on `cardekho.csv` (15411 rows, R²=0.94, MAE≈₹99k). Endpoints: `/health`, `/options`, `/insights`, `/predict`, `/similar`.
+- **Express API Server** (`artifacts/api-server`, port 8080) — proxies `/api/ml/*` to the Flask backend.
+- **React Frontend** (`artifacts/car-price-app`) — Vite + React + Tailwind + shadcn/ui + wouter + TanStack Query + recharts + framer-motion.
 
-## Stack
+## Frontend pages
+- `/login` — local auth (username/password stored in localStorage).
+- `/` — Dashboard with stat cards and quick nav.
+- `/predict` — Main prediction form with similar-car suggestions, saves to history.
+- `/compare` — Side-by-side comparison of two cars.
+- `/analysis` — Charts (top brands, fuel, age depreciation, transmission).
+- `/history` — Past predictions saved in localStorage.
 
-- **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
-- **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
-
-## Key Commands
-
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- `pnpm --filter @workspace/api-server run dev` — run API server locally
-
-See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
-
-## Python Flask Backend (Used Car Price Prediction)
-
-- Location: `backend/`
-- Files: `app.py`, `requirements.txt`, `cardekho.csv`
-- Runtime: Python 3.11
-- Workflow: `Flask Backend` (port 5000)
-- Trains a `RandomForestRegressor` on `cardekho.csv` at startup.
-- Endpoints:
-  - `GET /` — service info + model metrics
-  - `GET /health` — liveness + metrics
-  - `GET /options` — available brands/models/fuels/etc. for dropdowns
-  - `POST /predict` — body: `{brand, model, seller_type, fuel_type, transmission_type, vehicle_age, km_driven, mileage, engine, max_power, seats}` → predicted price + range
+## Run
+All workflows auto-start: Flask Backend, API Server, Car Price App.
