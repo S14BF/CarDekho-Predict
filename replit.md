@@ -25,3 +25,16 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+
+## Python Flask Backend (Used Car Price Prediction)
+
+- Location: `backend/`
+- Files: `app.py`, `requirements.txt`, `cardekho.csv`
+- Runtime: Python 3.11
+- Workflow: `Flask Backend` (port 5000)
+- Trains a `RandomForestRegressor` on `cardekho.csv` at startup.
+- Endpoints:
+  - `GET /` — service info + model metrics
+  - `GET /health` — liveness + metrics
+  - `GET /options` — available brands/models/fuels/etc. for dropdowns
+  - `POST /predict` — body: `{brand, model, seller_type, fuel_type, transmission_type, vehicle_age, km_driven, mileage, engine, max_power, seats}` → predicted price + range
