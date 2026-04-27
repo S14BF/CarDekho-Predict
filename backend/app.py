@@ -1,10 +1,15 @@
 import os
+import json
 import logging
+import hashlib
+import secrets
+import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
@@ -15,11 +20,60 @@ log = logging.getLogger("car-price-api")
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_PATH = BASE_DIR / "cardekho.csv"
+DB_PATH = BASE_DIR / "app.db"
 
 CATEGORICAL_COLS = ["brand", "model", "seller_type", "fuel_type", "transmission_type"]
 NUMERIC_COLS = ["vehicle_age", "km_driven", "mileage", "engine", "max_power", "seats"]
 TARGET_COL = "selling_price"
 
+
+# --------------------------------------------------------------------------- #
+# Database
+# --------------------------------------------------------------------------- #
+
+def get_db():
+    db = sqlite3.connect(DB_PATH)
+    db.row_factory = sqlite3.Row
+    return db
+
+
+def init_db():
+    db = get_db()
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            car_label TEXT NOT NULL,
+            predicted_price REAL NOT NULL,
+            price_low REAL,
+            price_high REAL,
+            inputs_json TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_predictions_user
+            ON predictions(username, created_at DESC);
+        """
+    )
+    db.commit()
+    db.close()
+
+
+def hash_password(password: str, salt: str) -> str:
+    return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+
+# --------------------------------------------------------------------------- #
+# ML model
+# --------------------------------------------------------------------------- #
 
 def load_dataset() -> pd.DataFrame:
     log.info("Loading dataset from %s", DATA_PATH)
@@ -97,6 +151,7 @@ def train_model():
 
 
 STATE = train_model()
+init_db()
 
 
 def encode_input(payload: dict) -> np.ndarray:
@@ -123,31 +178,36 @@ def encode_input(payload: dict) -> np.ndarray:
     return np.array([row])
 
 
+# --------------------------------------------------------------------------- #
+# Flask app
+# --------------------------------------------------------------------------- #
+
 app = Flask(__name__)
 CORS(app)
 
-from flask import Blueprint
 
-api = Blueprint("api", __name__)
-
-
-@api.get("/")
+@app.get("/")
 def index():
     return jsonify(
         {
             "service": "Used Car Price Prediction API",
-            "endpoints": ["/health", "/options", "/predict", "/insights", "/similar"],
+            "endpoints": [
+                "/health", "/options", "/predict", "/insights", "/similar",
+                "/auth/register", "/auth/login",
+                "/history (GET, POST)", "/history/<id> (DELETE)",
+                "/history/clear (POST)",
+            ],
             "metrics": STATE["metrics"],
         }
     )
 
 
-@api.get("/health")
+@app.get("/health")
 def health():
     return jsonify({"status": "ok", "metrics": STATE["metrics"]})
 
 
-@api.get("/options")
+@app.get("/options")
 def options():
     return jsonify(
         {
@@ -159,7 +219,7 @@ def options():
     )
 
 
-@api.get("/insights")
+@app.get("/insights")
 def insights():
     df = STATE["dataset"]
     by_brand = (
@@ -168,11 +228,7 @@ def insights():
         .sort_values("mean", ascending=False)
     )
     by_fuel = df.groupby("fuel_type")[TARGET_COL].mean().sort_values(ascending=False)
-    by_year = (
-        df.groupby("vehicle_age")[TARGET_COL]
-        .mean()
-        .sort_index()
-    )
+    by_year = df.groupby("vehicle_age")[TARGET_COL].mean().sort_index()
     by_transmission = df.groupby("transmission_type")[TARGET_COL].mean().to_dict()
 
     most_popular_brand = df["brand"].value_counts().idxmax()
@@ -203,7 +259,7 @@ def insights():
     )
 
 
-@api.post("/similar")
+@app.post("/similar")
 def similar():
     payload = request.get_json(silent=True) or {}
     target_price = float(payload.get("target_price", 0))
@@ -235,7 +291,7 @@ def similar():
     )
 
 
-@api.post("/predict")
+@app.post("/predict")
 def predict():
     payload = request.get_json(silent=True) or {}
     try:
@@ -261,10 +317,152 @@ def predict():
     )
 
 
-app.register_blueprint(api, url_prefix="/pyapi")
-app.register_blueprint(api, url_prefix="", name="api_root")
+# --------------------------------------------------------------------------- #
+# Auth
+# --------------------------------------------------------------------------- #
+
+@app.post("/auth/register")
+def register():
+    payload = request.get_json(silent=True) or {}
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    if not username or not password:
+        return jsonify({"error": "Username and password required"}), 400
+    if len(password) < 4:
+        return jsonify({"error": "Password must be at least 4 characters"}), 400
+
+    db = get_db()
+    existing = db.execute(
+        "SELECT username FROM users WHERE username = ?", (username,)
+    ).fetchone()
+    if existing:
+        db.close()
+        return jsonify({"error": "Username already taken"}), 409
+
+    salt = secrets.token_hex(16)
+    pw_hash = hash_password(password, salt)
+    db.execute(
+        "INSERT INTO users (username, password_hash, salt, created_at) VALUES (?, ?, ?, ?)",
+        (username, pw_hash, salt, datetime.utcnow().isoformat()),
+    )
+    db.commit()
+    db.close()
+    return jsonify({"success": True, "username": username})
+
+
+@app.post("/auth/login")
+def login():
+    payload = request.get_json(silent=True) or {}
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    if not username or not password:
+        return jsonify({"error": "Username and password required"}), 400
+
+    db = get_db()
+    row = db.execute(
+        "SELECT password_hash, salt FROM users WHERE username = ?", (username,)
+    ).fetchone()
+    db.close()
+    if not row:
+        return jsonify({"error": "Invalid username or password"}), 401
+    if hash_password(password, row["salt"]) != row["password_hash"]:
+        return jsonify({"error": "Invalid username or password"}), 401
+    return jsonify({"success": True, "username": username})
+
+
+# --------------------------------------------------------------------------- #
+# History
+# --------------------------------------------------------------------------- #
+
+@app.get("/history")
+def history_list():
+    username = request.args.get("username", "").strip()
+    if not username:
+        return jsonify({"error": "username query param required"}), 400
+    db = get_db()
+    rows = db.execute(
+        """SELECT id, created_at, car_label, predicted_price, price_low, price_high, inputs_json
+           FROM predictions WHERE username = ? ORDER BY created_at DESC""",
+        (username,),
+    ).fetchall()
+    db.close()
+    return jsonify(
+        {
+            "items": [
+                {
+                    "id": r["id"],
+                    "created_at": r["created_at"],
+                    "car_label": r["car_label"],
+                    "predicted_price": r["predicted_price"],
+                    "price_low": r["price_low"],
+                    "price_high": r["price_high"],
+                    "inputs": json.loads(r["inputs_json"]),
+                }
+                for r in rows
+            ]
+        }
+    )
+
+
+@app.post("/history")
+def history_save():
+    payload = request.get_json(silent=True) or {}
+    username = (payload.get("username") or "").strip()
+    car_label = payload.get("car_label") or ""
+    predicted_price = payload.get("predicted_price")
+    price_low = payload.get("price_low")
+    price_high = payload.get("price_high")
+    inputs = payload.get("inputs") or {}
+    if not username or not car_label or predicted_price is None:
+        return jsonify({"error": "Missing required fields"}), 400
+    db = get_db()
+    cur = db.execute(
+        """INSERT INTO predictions
+           (username, created_at, car_label, predicted_price, price_low, price_high, inputs_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            username,
+            datetime.utcnow().isoformat(),
+            car_label,
+            float(predicted_price),
+            float(price_low) if price_low is not None else None,
+            float(price_high) if price_high is not None else None,
+            json.dumps(inputs),
+        ),
+    )
+    db.commit()
+    new_id = cur.lastrowid
+    db.close()
+    return jsonify({"success": True, "id": new_id})
+
+
+@app.delete("/history/<int:entry_id>")
+def history_delete(entry_id: int):
+    username = request.args.get("username", "").strip()
+    if not username:
+        return jsonify({"error": "username query param required"}), 400
+    db = get_db()
+    db.execute(
+        "DELETE FROM predictions WHERE id = ? AND username = ?", (entry_id, username)
+    )
+    db.commit()
+    db.close()
+    return jsonify({"success": True})
+
+
+@app.post("/history/clear")
+def history_clear():
+    payload = request.get_json(silent=True) or {}
+    username = (payload.get("username") or "").strip()
+    if not username:
+        return jsonify({"error": "username required"}), 400
+    db = get_db()
+    db.execute("DELETE FROM predictions WHERE username = ?", (username,))
+    db.commit()
+    db.close()
+    return jsonify({"success": True})
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port, debug=False)
