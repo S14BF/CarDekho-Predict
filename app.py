@@ -1,10 +1,8 @@
 """VahanValue - Used Car Price Predictor (Streamlit UI)."""
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
-from typing import Any
 
 import pandas as pd
 import plotly.express as px
@@ -22,7 +20,7 @@ st.set_page_config(
 
 
 # --------------------------------------------------------------------------- #
-# Helpers
+# API helpers
 # --------------------------------------------------------------------------- #
 
 def api_get(path: str, params: dict | None = None) -> dict:
@@ -45,9 +43,13 @@ def api_delete(path: str, params: dict | None = None) -> bool:
     return r.ok
 
 
+# --------------------------------------------------------------------------- #
+# Formatting
+# --------------------------------------------------------------------------- #
+
 def fmt_inr(value: float | int | None) -> str:
     if value is None:
-        return "-"
+        return "—"
     value = float(value)
     if value >= 10_000_000:
         return f"₹{value / 10_000_000:.2f} Cr"
@@ -60,9 +62,13 @@ def fmt_inr(value: float | int | None) -> str:
 
 def fmt_inr_full(value: float | int | None) -> str:
     if value is None:
-        return "-"
+        return "—"
     return f"₹{int(round(float(value))):,}"
 
+
+# --------------------------------------------------------------------------- #
+# Cached data loaders
+# --------------------------------------------------------------------------- #
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_options() -> dict:
@@ -73,6 +79,15 @@ def load_options() -> dict:
 def load_insights() -> dict:
     return api_get("/insights")
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_health() -> dict:
+    return api_get("/health")
+
+
+# --------------------------------------------------------------------------- #
+# Session
+# --------------------------------------------------------------------------- #
 
 def init_state() -> None:
     st.session_state.setdefault("user", None)
@@ -85,9 +100,9 @@ def require_login() -> bool:
 
 
 def logout() -> None:
-    st.session_state.user = None
+    for k in ("user", "last_prediction"):
+        st.session_state[k] = None
     st.session_state.page = "Dashboard"
-    st.session_state.last_prediction = None
     st.rerun()
 
 
@@ -96,69 +111,77 @@ def logout() -> None:
 # --------------------------------------------------------------------------- #
 
 def render_auth() -> None:
-    st.markdown(
-        """
-        <div style="text-align:center;padding:2rem 0 1rem;">
-            <div style="font-size:3rem;">🚗</div>
-            <h1 style="margin:.25rem 0;">VahanValue</h1>
-            <p style="color:#64748b;margin:0;">Predict used car prices with machine learning</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     left, mid, right = st.columns([1, 2, 1])
     with mid:
-        tab_login, tab_register, tab_forgot = st.tabs(["Login", "Register", "Forgot Password"])
+        st.markdown("## VahanValue")
+        st.caption("Used car price predictions powered by machine learning.")
+        st.write("")
 
-        with tab_login:
-            with st.form("login_form", clear_on_submit=False):
-                u = st.text_input("Username", key="login_user")
-                p = st.text_input("Password", type="password", key="login_pw")
-                submitted = st.form_submit_button("Login", use_container_width=True, type="primary")
-            if submitted:
-                if not u or not p:
-                    st.warning("Enter username and password.")
-                else:
-                    ok, data = api_post("/auth/login", {"username": u.strip(), "password": p})
-                    if ok:
-                        st.session_state.user = data["username"]
-                        st.session_state.page = "Dashboard"
-                        st.success(f"Welcome back, {data['username']}!")
-                        st.rerun()
-                    else:
-                        st.error(data.get("error", "Login failed"))
-
-        with tab_register:
-            with st.form("register_form", clear_on_submit=False):
-                u = st.text_input("Choose a username", key="reg_user")
-                p = st.text_input("Choose a password (4+ chars)", type="password", key="reg_pw")
-                p2 = st.text_input("Confirm password", type="password", key="reg_pw2")
-                submitted = st.form_submit_button("Create account", use_container_width=True, type="primary")
-            if submitted:
-                if not u or not p:
-                    st.warning("Enter username and password.")
-                elif p != p2:
-                    st.error("Passwords do not match.")
-                else:
-                    ok, data = api_post("/auth/register", {"username": u.strip(), "password": p})
-                    if ok:
-                        st.session_state.user = data["username"]
-                        st.session_state.page = "Dashboard"
-                        st.success(f"Account created. Welcome, {data['username']}!")
-                        st.rerun()
-                    else:
-                        st.error(data.get("error", "Registration failed"))
-
-        with tab_forgot:
-            st.info(
-                "This is a demo project. Password reset is not implemented — "
-                "please register a new account if you forgot your password."
+        with st.container(border=True):
+            tab_login, tab_register, tab_forgot = st.tabs(
+                ["Sign in", "Create account", "Forgot password"]
             )
+
+            with tab_login:
+                with st.form("login_form", clear_on_submit=False):
+                    u = st.text_input("Username", key="login_user")
+                    p = st.text_input("Password", type="password", key="login_pw")
+                    submitted = st.form_submit_button(
+                        "Sign in", use_container_width=True, type="primary"
+                    )
+                if submitted:
+                    if not u or not p:
+                        st.warning("Enter username and password.")
+                    else:
+                        ok, data = api_post(
+                            "/auth/login", {"username": u.strip(), "password": p}
+                        )
+                        if ok:
+                            st.session_state.user = data["username"]
+                            st.session_state.page = "Dashboard"
+                            st.rerun()
+                        else:
+                            st.error(data.get("error", "Login failed"))
+
+            with tab_register:
+                with st.form("register_form", clear_on_submit=False):
+                    u = st.text_input("Choose a username", key="reg_user")
+                    p = st.text_input(
+                        "Choose a password (4+ characters)",
+                        type="password", key="reg_pw",
+                    )
+                    p2 = st.text_input(
+                        "Confirm password", type="password", key="reg_pw2"
+                    )
+                    submitted = st.form_submit_button(
+                        "Create account", use_container_width=True, type="primary"
+                    )
+                if submitted:
+                    if not u or not p:
+                        st.warning("Enter username and password.")
+                    elif p != p2:
+                        st.error("Passwords do not match.")
+                    else:
+                        ok, data = api_post(
+                            "/auth/register",
+                            {"username": u.strip(), "password": p},
+                        )
+                        if ok:
+                            st.session_state.user = data["username"]
+                            st.session_state.page = "Dashboard"
+                            st.rerun()
+                        else:
+                            st.error(data.get("error", "Registration failed"))
+
+            with tab_forgot:
+                st.info(
+                    "Password reset is not implemented in this demo. "
+                    "Please register a new account if you have forgotten your password."
+                )
 
 
 # --------------------------------------------------------------------------- #
-# Layout
+# Sidebar / layout
 # --------------------------------------------------------------------------- #
 
 PAGES = ["Dashboard", "Predict", "Compare", "Analysis", "History"]
@@ -166,28 +189,42 @@ PAGES = ["Dashboard", "Predict", "Compare", "Analysis", "History"]
 
 def render_sidebar() -> None:
     with st.sidebar:
-        st.markdown("## 🚗 VahanValue")
+        st.markdown("### VahanValue")
         st.caption(f"Signed in as **{st.session_state.user}**")
-        st.divider()
+        st.write("")
         for p in PAGES:
-            if st.button(p, use_container_width=True,
-                         type=("primary" if st.session_state.page == p else "secondary"),
-                         key=f"nav_{p}"):
+            is_active = st.session_state.page == p
+            if st.button(
+                p,
+                use_container_width=True,
+                type=("primary" if is_active else "secondary"),
+                key=f"nav_{p}",
+            ):
                 st.session_state.page = p
                 st.rerun()
+        st.write("")
         st.divider()
-        if st.button("Logout", use_container_width=True):
+        if st.button("Sign out", use_container_width=True):
             logout()
-        st.caption("Powered by RandomForest + CarDekho dataset")
+        st.caption("RandomForest model on the CarDekho dataset")
+
+
+def page_header(title: str, subtitle: str = "") -> None:
+    st.markdown(f"## {title}")
+    if subtitle:
+        st.caption(subtitle)
+    st.write("")
 
 
 # --------------------------------------------------------------------------- #
-# Pages
+# Dashboard
 # --------------------------------------------------------------------------- #
 
 def render_dashboard() -> None:
-    st.title("Dashboard")
-    st.write(f"Welcome back, **{st.session_state.user}**.")
+    page_header(
+        f"Welcome back, {st.session_state.user}",
+        "Market overview from the latest CarDekho dataset.",
+    )
 
     try:
         insights = load_insights()
@@ -197,26 +234,45 @@ def render_dashboard() -> None:
 
     totals = insights["totals"]
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Cars in dataset", f"{totals['rows']:,}")
-    c2.metric("Average price", fmt_inr(totals["average_price"]))
-    c3.metric("Median price", fmt_inr(totals["median_price"]))
-    c4.metric("Most popular brand", totals["most_popular_brand"])
+    with c1:
+        with st.container(border=True):
+            st.caption("Cars analysed")
+            st.subheader(f"{totals['rows']:,}")
+    with c2:
+        with st.container(border=True):
+            st.caption("Average price")
+            st.subheader(fmt_inr(totals["average_price"]))
+    with c3:
+        with st.container(border=True):
+            st.caption("Median price")
+            st.subheader(fmt_inr(totals["median_price"]))
+    with c4:
+        with st.container(border=True):
+            st.caption("Most popular brand")
+            st.subheader(totals["most_popular_brand"])
 
-    st.divider()
+    st.write("")
 
     try:
-        health = api_get("/health")
+        health = load_health()
         m = health.get("metrics", {})
-        st.markdown("#### Model performance")
-        a, b, c = st.columns(3)
-        a.metric("R² score", f"{m.get('r2', 0):.3f}")
-        b.metric("Mean abs error", fmt_inr(m.get("mae")))
-        c.metric("Training rows", f"{m.get('training_rows', 0):,}")
+        with st.container(border=True):
+            st.markdown("**Model accuracy**")
+            a, b, c, d = st.columns(4)
+            a.metric("R² score", f"{m.get('r2', 0):.3f}",
+                     help="1.0 is perfect. Above 0.9 is considered very good.")
+            b.metric("Mean abs. error", fmt_inr(m.get("mae")),
+                     help="Average rupee difference between predicted and actual price.")
+            c.metric("Training rows", f"{m.get('training_rows', 0):,}")
+            d.metric("Test rows", f"{m.get('test_rows', 0):,}")
+            st.caption(
+                "The model is evaluated on 20% of the dataset that was never seen during training."
+            )
     except Exception:
         pass
 
-    st.divider()
-    st.markdown("#### Quick actions")
+    st.write("")
+    st.markdown("**Quick actions**")
     col1, col2, col3, col4 = st.columns(4)
     if col1.button("Predict a car price", use_container_width=True, type="primary"):
         st.session_state.page = "Predict"; st.rerun()
@@ -228,25 +284,39 @@ def render_dashboard() -> None:
         st.session_state.page = "History"; st.rerun()
 
 
+# --------------------------------------------------------------------------- #
+# Predict
+# --------------------------------------------------------------------------- #
+
 def car_form(prefix: str, options: dict) -> dict:
     opts = options["options"]
     brand_models = options["brand_models"]
     col1, col2 = st.columns(2)
     with col1:
         brand = st.selectbox("Brand", opts["brand"], key=f"{prefix}_brand")
-        models_for_brand = brand_models.get(brand, [])
-        model_default_index = 0 if models_for_brand else 0
-        model = st.selectbox("Model", models_for_brand or ["-"], key=f"{prefix}_model",
-                             index=model_default_index)
+        models_for_brand = brand_models.get(brand, []) or ["—"]
+        model = st.selectbox("Model", models_for_brand, key=f"{prefix}_model")
         fuel_type = st.selectbox("Fuel type", opts["fuel_type"], key=f"{prefix}_fuel")
-        transmission_type = st.selectbox("Transmission", opts["transmission_type"], key=f"{prefix}_trans")
-        seller_type = st.selectbox("Seller type", opts["seller_type"], key=f"{prefix}_seller")
+        transmission_type = st.selectbox(
+            "Transmission", opts["transmission_type"], key=f"{prefix}_trans"
+        )
+        seller_type = st.selectbox(
+            "Seller type", opts["seller_type"], key=f"{prefix}_seller"
+        )
     with col2:
         vehicle_age = st.number_input("Vehicle age (years)", 0, 40, 5, key=f"{prefix}_age")
-        km_driven = st.number_input("Km driven", 0, 1_000_000, 50_000, step=1000, key=f"{prefix}_km")
-        mileage = st.number_input("Mileage (kmpl)", 0.0, 50.0, 18.0, step=0.5, key=f"{prefix}_mileage")
-        engine = st.number_input("Engine (cc)", 500, 6000, 1200, step=50, key=f"{prefix}_engine")
-        max_power = st.number_input("Max power (bhp)", 20.0, 800.0, 85.0, step=1.0, key=f"{prefix}_bhp")
+        km_driven = st.number_input(
+            "Kilometres driven", 0, 1_000_000, 50_000, step=1000, key=f"{prefix}_km"
+        )
+        mileage = st.number_input(
+            "Mileage (kmpl)", 0.0, 50.0, 18.0, step=0.5, key=f"{prefix}_mileage"
+        )
+        engine = st.number_input(
+            "Engine (cc)", 500, 6000, 1200, step=50, key=f"{prefix}_engine"
+        )
+        max_power = st.number_input(
+            "Max power (bhp)", 20.0, 800.0, 85.0, step=1.0, key=f"{prefix}_bhp"
+        )
         seats = st.number_input("Seats", 2, 10, 5, key=f"{prefix}_seats")
     return {
         "brand": brand, "model": model, "fuel_type": fuel_type,
@@ -258,8 +328,10 @@ def car_form(prefix: str, options: dict) -> dict:
 
 
 def render_predict() -> None:
-    st.title("Predict a car price")
-    st.caption("Enter the car details below to get a market-value estimate.")
+    page_header(
+        "Predict a car price",
+        "Enter the car details to get a market-value estimate.",
+    )
 
     try:
         options = load_options()
@@ -267,16 +339,17 @@ def render_predict() -> None:
         st.error(f"Could not load form options: {e}")
         return
 
-    inputs = car_form("p", options)
-
-    c1, c2 = st.columns([1, 5])
-    predict_clicked = c1.button("Predict price", type="primary")
-    if c2.button("Reset"):
-        for k in list(st.session_state.keys()):
-            if k.startswith("p_"):
-                del st.session_state[k]
-        st.session_state.last_prediction = None
-        st.rerun()
+    with st.container(border=True):
+        inputs = car_form("p", options)
+        st.write("")
+        c1, c2, _ = st.columns([1, 1, 4])
+        predict_clicked = c1.button("Predict price", type="primary", use_container_width=True)
+        if c2.button("Reset", use_container_width=True):
+            for k in list(st.session_state.keys()):
+                if k.startswith("p_"):
+                    del st.session_state[k]
+            st.session_state.last_prediction = None
+            st.rerun()
 
     if predict_clicked:
         ok, data = api_post("/predict", inputs)
@@ -284,7 +357,6 @@ def render_predict() -> None:
             st.error(data.get("error", "Prediction failed"))
             return
         st.session_state.last_prediction = {"inputs": inputs, "result": data}
-        # Save to DB
         car_label = f"{inputs['brand']} {inputs['model']} ({inputs['vehicle_age']}y)"
         api_post("/history", {
             "username": st.session_state.user,
@@ -298,17 +370,25 @@ def render_predict() -> None:
     pred = st.session_state.get("last_prediction")
     if pred:
         result = pred["result"]
-        st.divider()
-        c1, c2, c3 = st.columns([2, 1, 1])
-        c1.metric("Estimated market price", fmt_inr_full(result["predicted_price"]))
-        c2.metric("Lower bound", fmt_inr_full(result["price_range"]["low"]))
-        c3.metric("Upper bound", fmt_inr_full(result["price_range"]["high"]))
+        st.write("")
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([2, 1, 1])
+            c1.metric("Estimated market price", fmt_inr_full(result["predicted_price"]))
+            c2.metric("Lower bound", fmt_inr_full(result["price_range"]["low"]))
+            c3.metric("Upper bound", fmt_inr_full(result["price_range"]["high"]))
+            metrics = result.get("model_metrics", {})
+            if metrics:
+                st.caption(
+                    f"Model R² = {metrics.get('r2', 0):.3f}, "
+                    f"average error ≈ {fmt_inr(metrics.get('mae'))}. "
+                    "The lower/upper bounds reflect the spread across the 200 trees in the forest."
+                )
 
-        st.markdown("#### Similar listings in the dataset")
+        st.write("")
+        st.markdown("**Similar listings in the dataset**")
         sok, sim = api_post("/similar", {"target_price": result["predicted_price"]})
         if sok and sim.get("items"):
-            df = pd.DataFrame(sim["items"])
-            df = df.rename(columns={
+            df = pd.DataFrame(sim["items"]).rename(columns={
                 "car_name": "Car", "brand": "Brand", "model": "Model",
                 "vehicle_age": "Age (yr)", "km_driven": "Km driven",
                 "fuel_type": "Fuel", "transmission_type": "Trans.",
@@ -316,13 +396,23 @@ def render_predict() -> None:
             })
             df["Listed price"] = df["Listed price"].apply(fmt_inr_full)
             st.dataframe(df, hide_index=True, use_container_width=True)
+            st.caption(
+                "These real listings were sold near the predicted price — "
+                "a reality check for how close the estimate is."
+            )
         else:
             st.info("No similar listings found in the dataset.")
 
 
+# --------------------------------------------------------------------------- #
+# Compare
+# --------------------------------------------------------------------------- #
+
 def render_compare() -> None:
-    st.title("Compare two cars")
-    st.caption("Fill in details for both cars, then compare their estimated prices side-by-side.")
+    page_header(
+        "Compare two cars",
+        "Fill in details for both cars to see the predicted prices side by side.",
+    )
     try:
         options = load_options()
     except Exception as e:
@@ -331,11 +421,13 @@ def render_compare() -> None:
 
     colA, colB = st.columns(2)
     with colA:
-        st.markdown("### Car A")
-        a = car_form("a", options)
+        with st.container(border=True):
+            st.markdown("**Car A**")
+            a = car_form("a", options)
     with colB:
-        st.markdown("### Car B")
-        b = car_form("b", options)
+        with st.container(border=True):
+            st.markdown("**Car B**")
+            b = car_form("b", options)
 
     if st.button("Compare", type="primary"):
         ok_a, res_a = api_post("/predict", a)
@@ -344,29 +436,39 @@ def render_compare() -> None:
             st.error("Could not get predictions for both cars.")
             return
 
-        st.divider()
-        c1, c2 = st.columns(2)
-        c1.metric(f"{a['brand']} {a['model']}", fmt_inr_full(res_a["predicted_price"]))
-        c2.metric(f"{b['brand']} {b['model']}", fmt_inr_full(res_b["predicted_price"]))
-
-        diff = res_a["predicted_price"] - res_b["predicted_price"]
-        if abs(diff) < 1:
-            st.info("Both cars have essentially the same predicted value.")
-        elif diff < 0:
-            st.success(
-                f"Car A is **{fmt_inr_full(abs(diff))}** cheaper than Car B "
-                f"({abs(diff) / res_b['predicted_price'] * 100:.1f}% less)."
+        st.write("")
+        with st.container(border=True):
+            c1, c2 = st.columns(2)
+            c1.metric(
+                f"{a['brand']} {a['model']}", fmt_inr_full(res_a["predicted_price"])
             )
-        else:
-            st.success(
-                f"Car B is **{fmt_inr_full(abs(diff))}** cheaper than Car A "
-                f"({abs(diff) / res_a['predicted_price'] * 100:.1f}% less)."
+            c2.metric(
+                f"{b['brand']} {b['model']}", fmt_inr_full(res_b["predicted_price"])
             )
+            diff = res_a["predicted_price"] - res_b["predicted_price"]
+            if abs(diff) < 1:
+                st.info("Both cars have essentially the same predicted value.")
+            elif diff < 0:
+                st.success(
+                    f"Car A is **{fmt_inr_full(abs(diff))}** cheaper than Car B "
+                    f"({abs(diff) / res_b['predicted_price'] * 100:.1f}% less)."
+                )
+            else:
+                st.success(
+                    f"Car B is **{fmt_inr_full(abs(diff))}** cheaper than Car A "
+                    f"({abs(diff) / res_a['predicted_price'] * 100:.1f}% less)."
+                )
 
         rows = [
-            ("Predicted price", fmt_inr_full(res_a["predicted_price"]), fmt_inr_full(res_b["predicted_price"])),
-            ("Price range low", fmt_inr_full(res_a["price_range"]["low"]), fmt_inr_full(res_b["price_range"]["low"])),
-            ("Price range high", fmt_inr_full(res_a["price_range"]["high"]), fmt_inr_full(res_b["price_range"]["high"])),
+            ("Predicted price",
+             fmt_inr_full(res_a["predicted_price"]),
+             fmt_inr_full(res_b["predicted_price"])),
+            ("Lower bound",
+             fmt_inr_full(res_a["price_range"]["low"]),
+             fmt_inr_full(res_b["price_range"]["low"])),
+            ("Upper bound",
+             fmt_inr_full(res_a["price_range"]["high"]),
+             fmt_inr_full(res_b["price_range"]["high"])),
             ("Brand", a["brand"], b["brand"]),
             ("Model", a["model"], b["model"]),
             ("Fuel", a["fuel_type"], b["fuel_type"]),
@@ -384,9 +486,15 @@ def render_compare() -> None:
         )
 
 
+# --------------------------------------------------------------------------- #
+# Analysis
+# --------------------------------------------------------------------------- #
+
 def render_analysis() -> None:
-    st.title("Market analysis")
-    st.caption("Aggregated insights from the CarDekho dataset.")
+    page_header(
+        "Market analysis",
+        "Aggregated insights drawn from the entire CarDekho dataset.",
+    )
     try:
         ins = load_insights()
     except Exception as e:
@@ -398,62 +506,86 @@ def render_analysis() -> None:
     by_age = pd.DataFrame(ins["by_age"])
     by_trans = pd.DataFrame(ins["by_transmission"])
 
-    # filter
     brand_filter = st.multiselect(
-        "Filter brands (optional)",
+        "Filter brands (leave empty to view top 10)",
         sorted(by_brand["brand"].tolist()),
         default=[],
-        help="Leave empty to view top 10 brands by average price.",
     )
-    if brand_filter:
-        bb = by_brand[by_brand["brand"].isin(brand_filter)]
-    else:
-        bb = by_brand.head(10)
+    bb = (by_brand[by_brand["brand"].isin(brand_filter)]
+          if brand_filter else by_brand.head(10))
+
+    chart_layout = dict(
+        height=360, margin=dict(t=10, b=10, l=10, r=10),
+        plot_bgcolor="white", paper_bgcolor="white",
+        font=dict(color="#0F172A"),
+    )
 
     c1, c2 = st.columns(2)
     with c1:
-        st.subheader("Average price by brand")
-        fig = px.bar(bb, x="brand", y="average_price",
-                     labels={"brand": "Brand", "average_price": "Avg price (INR)"},
-                     color="average_price", color_continuous_scale="Tealgrn")
-        fig.update_layout(showlegend=False, height=380, margin=dict(t=10, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        with st.container(border=True):
+            st.markdown("**Average price by brand**")
+            fig = px.bar(
+                bb, x="brand", y="average_price",
+                labels={"brand": "Brand", "average_price": "Avg price (INR)"},
+                color_discrete_sequence=["#0F766E"],
+            )
+            fig.update_layout(**chart_layout)
+            st.plotly_chart(fig, use_container_width=True)
     with c2:
-        st.subheader("Average price by fuel type")
-        fig = px.bar(by_fuel, x="fuel_type", y="average_price",
-                     labels={"fuel_type": "Fuel", "average_price": "Avg price (INR)"},
-                     color="fuel_type")
-        fig.update_layout(showlegend=False, height=380, margin=dict(t=10, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        with st.container(border=True):
+            st.markdown("**Average price by fuel type**")
+            fig = px.bar(
+                by_fuel, x="fuel_type", y="average_price",
+                labels={"fuel_type": "Fuel", "average_price": "Avg price (INR)"},
+                color_discrete_sequence=["#0F766E"],
+            )
+            fig.update_layout(**chart_layout)
+            st.plotly_chart(fig, use_container_width=True)
 
     c3, c4 = st.columns(2)
     with c3:
-        st.subheader("Depreciation by vehicle age")
-        fig = px.line(by_age.sort_values("vehicle_age"),
-                      x="vehicle_age", y="average_price",
-                      labels={"vehicle_age": "Age (years)", "average_price": "Avg price (INR)"},
-                      markers=True)
-        fig.update_layout(height=380, margin=dict(t=10, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        with st.container(border=True):
+            st.markdown("**Depreciation by vehicle age**")
+            fig = px.line(
+                by_age.sort_values("vehicle_age"),
+                x="vehicle_age", y="average_price",
+                labels={"vehicle_age": "Age (years)", "average_price": "Avg price (INR)"},
+                markers=True, color_discrete_sequence=["#0F766E"],
+            )
+            fig.update_layout(**chart_layout)
+            st.plotly_chart(fig, use_container_width=True)
     with c4:
-        st.subheader("Average price by transmission")
-        fig = px.bar(by_trans, x="transmission_type", y="average_price",
-                     labels={"transmission_type": "Transmission", "average_price": "Avg price (INR)"},
-                     color="transmission_type")
-        fig.update_layout(showlegend=False, height=380, margin=dict(t=10, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        with st.container(border=True):
+            st.markdown("**Average price by transmission**")
+            fig = px.bar(
+                by_trans, x="transmission_type", y="average_price",
+                labels={"transmission_type": "Transmission",
+                        "average_price": "Avg price (INR)"},
+                color_discrete_sequence=["#0F766E"],
+            )
+            fig.update_layout(**chart_layout)
+            st.plotly_chart(fig, use_container_width=True)
 
-    st.divider()
-    st.subheader("Top brands table")
-    st.dataframe(
-        by_brand.assign(average_price=by_brand["average_price"].apply(fmt_inr_full)),
-        hide_index=True, use_container_width=True,
-    )
+    st.write("")
+    with st.container(border=True):
+        st.markdown("**All brands**")
+        table = by_brand.assign(
+            average_price=by_brand["average_price"].apply(fmt_inr_full)
+        ).rename(columns={
+            "brand": "Brand", "average_price": "Avg price", "count": "Listings"
+        })
+        st.dataframe(table, hide_index=True, use_container_width=True)
 
+
+# --------------------------------------------------------------------------- #
+# History
+# --------------------------------------------------------------------------- #
 
 def render_history() -> None:
-    st.title("Prediction history")
-    st.caption("All your past price predictions, saved in the database.")
+    page_header(
+        "Prediction history",
+        "Every prediction you've made, stored in the database.",
+    )
 
     try:
         data = api_get("/history", params={"username": st.session_state.user})
@@ -466,7 +598,7 @@ def render_history() -> None:
         st.info("You haven't saved any predictions yet. Try the Predict page.")
         return
 
-    c1, c2 = st.columns([1, 5])
+    c1, _ = st.columns([1, 5])
     if c1.button("Clear all", type="secondary"):
         api_post("/history/clear", {"username": st.session_state.user})
         st.rerun()
@@ -481,17 +613,20 @@ def render_history() -> None:
             except Exception:
                 pass
             top[0].caption(ts)
-            top[1].metric("Predicted", fmt_inr_full(it["predicted_price"]),
-                          label_visibility="collapsed")
+            top[1].metric(
+                "Predicted", fmt_inr_full(it["predicted_price"]),
+                label_visibility="collapsed",
+            )
             range_text = f"{fmt_inr(it['price_low'])} – {fmt_inr(it['price_high'])}"
             top[2].markdown(f"Range\n\n{range_text}")
             if top[3].button("Delete", key=f"del_{it['id']}"):
-                api_delete(f"/history/{it['id']}",
-                           params={"username": st.session_state.user})
+                api_delete(
+                    f"/history/{it['id']}",
+                    params={"username": st.session_state.user},
+                )
                 st.rerun()
             with st.expander("View inputs"):
-                inp = it["inputs"]
-                st.json(inp, expanded=False)
+                st.json(it["inputs"], expanded=False)
 
 
 # --------------------------------------------------------------------------- #
