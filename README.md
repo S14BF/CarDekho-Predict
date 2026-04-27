@@ -197,12 +197,7 @@ pip install --force-reinstall -r requirements.txt
 - **streamlit** (1.56.0+) - UI framework
 - **plotly** (6.7.0+) - Interactive charts
 
-## 🎓 Project Info
 
-- **Type**: College PSDL (Python Software Development Lab) Project
-- **Team**: Individual
-- **Duration**: Semester project
-- **Language**: 100% Python
 
 ## 📄 License
 
@@ -218,4 +213,4 @@ For questions or issues, please open a GitHub issue or contact the maintainer.
 
 ---
 
-**Made with ❤️ for predicting car prices accurately**
+
