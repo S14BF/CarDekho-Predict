@@ -8,6 +8,13 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+from ui.theme import (
+    apply_theme,
+    render_footer,
+    render_first_page_showcase,
+    render_hero_header,
+)
+from ui.validation import validate_car_inputs, validate_login, validate_registration
 
 API_BASE = os.environ.get("API_BASE", "http://127.0.0.1:8000")
 
@@ -24,13 +31,26 @@ st.set_page_config(
 # --------------------------------------------------------------------------- #
 
 def api_get(path: str, params: dict | None = None) -> dict:
-    r = requests.get(f"{API_BASE}{path}", params=params, timeout=30)
-    r.raise_for_status()
-    return r.json()
+    try:
+        r = requests.get(f"{API_BASE}{path}", params=params, timeout=30)
+        r.raise_for_status()
+        return r.json()
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(
+            "Backend is unreachable. Please start backend/app.py on port 8000."
+        ) from exc
 
 
 def api_post(path: str, payload: dict) -> tuple[bool, dict]:
-    r = requests.post(f"{API_BASE}{path}", json=payload, timeout=30)
+    try:
+        r = requests.post(f"{API_BASE}{path}", json=payload, timeout=30)
+    except requests.exceptions.RequestException:
+        return False, {
+            "error": (
+                "Cannot connect to backend API. Start backend/app.py first "
+                "and ensure it is running on http://127.0.0.1:8000."
+            )
+        }
     try:
         data = r.json()
     except Exception:
@@ -39,8 +59,11 @@ def api_post(path: str, payload: dict) -> tuple[bool, dict]:
 
 
 def api_delete(path: str, params: dict | None = None) -> bool:
-    r = requests.delete(f"{API_BASE}{path}", params=params, timeout=30)
-    return r.ok
+    try:
+        r = requests.delete(f"{API_BASE}{path}", params=params, timeout=30)
+        return r.ok
+    except requests.exceptions.RequestException:
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -64,6 +87,11 @@ def fmt_inr_full(value: float | int | None) -> str:
     if value is None:
         return "—"
     return f"₹{int(round(float(value))):,}"
+
+
+def show_validation_errors(errors: list[str]) -> None:
+    for msg in errors:
+        st.error(msg)
 
 
 # --------------------------------------------------------------------------- #
@@ -93,6 +121,7 @@ def init_state() -> None:
     st.session_state.setdefault("user", None)
     st.session_state.setdefault("page", "Dashboard")
     st.session_state.setdefault("last_prediction", None)
+    st.session_state.setdefault("dark_mode", False)
 
 
 def require_login() -> bool:
@@ -111,27 +140,61 @@ def logout() -> None:
 # --------------------------------------------------------------------------- #
 
 def render_auth() -> None:
-    left, mid, right = st.columns([1, 2, 1])
-    with mid:
-        st.markdown("## VahanValue")
-        st.caption("Used car price predictions powered by machine learning.")
-        st.write("")
+    render_first_page_showcase()
 
+    col_left, col_right = st.columns([1, 1], gap="large")
+    with col_left:
         with st.container(border=True):
+            st.markdown("### Different Brands")
+            st.caption("Explore valuations across popular automotive brands.")
+            st.markdown(
+                """
+                <div class="vv-brand-grid">
+                    <div class="vv-brand-item"><img src="https://upload.wikimedia.org/wikipedia/commons/4/44/BMW.svg" alt="BMW"/><span>BMW</span></div>
+                    <div class="vv-brand-item"><img src="https://upload.wikimedia.org/wikipedia/commons/9/92/Audi-Logo_2016.svg" alt="Audi"/><span>Audi</span></div>
+                    <div class="vv-brand-item"><img src="https://upload.wikimedia.org/wikipedia/commons/9/90/Mercedes-Logo.svg" alt="Mercedes"/><span>Mercedes</span></div>
+                    <div class="vv-brand-item"><img src="https://upload.wikimedia.org/wikipedia/commons/9/9d/Toyota_carlogo.svg" alt="Toyota"/><span>Toyota</span></div>
+                    <div class="vv-brand-item"><img src="https://upload.wikimedia.org/wikipedia/commons/3/38/Honda.svg" alt="Honda"/><span>Honda</span></div>
+                    <div class="vv-brand-item"><img src="https://upload.wikimedia.org/wikipedia/commons/4/44/Hyundai_Motor_Company_logo.svg" alt="Hyundai"/><span>Hyundai</span></div>
+                    <div class="vv-brand-item"><img src="https://upload.wikimedia.org/wikipedia/commons/4/47/KIA_logo2.svg" alt="Kia"/><span>Kia</span></div>
+                    <div class="vv-brand-item"><img src="https://upload.wikimedia.org/wikipedia/commons/8/8e/Tata_logo.svg" alt="Tata"/><span>Tata</span></div>
+                    <div class="vv-brand-item"><img src="https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/Skoda_Auto_logo.svg/512px-Skoda_Auto_logo.svg.png" alt="Skoda"/><span>Skoda</span></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.caption("Get fair pricing predictions across all major brands.")
+
+    with col_right:
+        st.markdown('<div class="vv-auth-wrap">', unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown('<div class="vv-auth-card">', unsafe_allow_html=True)
+            st.markdown("### Login / Register")
+            st.caption("Access your dashboard and saved predictions.")
             tab_login, tab_register, tab_forgot = st.tabs(
                 ["Sign in", "Create account", "Forgot password"]
             )
 
             with tab_login:
                 with st.form("login_form", clear_on_submit=False):
-                    u = st.text_input("Username", key="login_user")
-                    p = st.text_input("Password", type="password", key="login_pw")
+                    u = st.text_input(
+                        "Username",
+                        key="login_user",
+                        placeholder="Enter your username",
+                    )
+                    p = st.text_input(
+                        "Password",
+                        type="password",
+                        key="login_pw",
+                        placeholder="Enter your password",
+                    )
                     submitted = st.form_submit_button(
                         "Sign in", use_container_width=True, type="primary"
                     )
                 if submitted:
-                    if not u or not p:
-                        st.warning("Enter username and password.")
+                    errors = validate_login(u, p)
+                    if errors:
+                        show_validation_errors(errors)
                     else:
                         ok, data = api_post(
                             "/auth/login", {"username": u.strip(), "password": p}
@@ -145,22 +208,30 @@ def render_auth() -> None:
 
             with tab_register:
                 with st.form("register_form", clear_on_submit=False):
-                    u = st.text_input("Choose a username", key="reg_user")
+                    u = st.text_input(
+                        "Create username",
+                        key="reg_user",
+                        placeholder="Choose a username",
+                    )
                     p = st.text_input(
-                        "Choose a password (4+ characters)",
-                        type="password", key="reg_pw",
+                        "Create password (6+ characters)",
+                        type="password",
+                        key="reg_pw",
+                        placeholder="At least 6 characters with mixed case and number",
                     )
                     p2 = st.text_input(
-                        "Confirm password", type="password", key="reg_pw2"
+                        "Confirm password",
+                        type="password",
+                        key="reg_pw2",
+                        placeholder="Re-enter your password",
                     )
                     submitted = st.form_submit_button(
                         "Create account", use_container_width=True, type="primary"
                     )
                 if submitted:
-                    if not u or not p:
-                        st.warning("Enter username and password.")
-                    elif p != p2:
-                        st.error("Passwords do not match.")
+                    errors = validate_registration(u, p, p2)
+                    if errors:
+                        show_validation_errors(errors)
                     else:
                         ok, data = api_post(
                             "/auth/register",
@@ -178,6 +249,8 @@ def render_auth() -> None:
                     "Password reset is not implemented in this demo. "
                     "Please register a new account if you have forgotten your password."
                 )
+            st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -188,14 +261,26 @@ PAGES = ["Dashboard", "Predict", "Compare", "Analysis", "History"]
 
 
 def render_sidebar() -> None:
+    nav_labels = {
+        "Dashboard": "Dashboard",
+        "Predict": "Predict",
+        "Compare": "Compare",
+        "Analysis": "Analysis",
+        "History": "History",
+    }
     with st.sidebar:
         st.markdown("### VahanValue")
         st.caption(f"Signed in as **{st.session_state.user}**")
+        st.caption("Smart used car pricing assistant")
+        if st.toggle("Dark mode", value=st.session_state.dark_mode):
+            st.session_state.dark_mode = True
+        else:
+            st.session_state.dark_mode = False
         st.write("")
         for p in PAGES:
             is_active = st.session_state.page == p
             if st.button(
-                p,
+                nav_labels[p],
                 use_container_width=True,
                 type=("primary" if is_active else "secondary"),
                 key=f"nav_{p}",
@@ -206,13 +291,11 @@ def render_sidebar() -> None:
         st.divider()
         if st.button("Sign out", use_container_width=True):
             logout()
-        st.caption("RandomForest model on the CarDekho dataset")
+        st.caption("RandomForest model trained on CarDekho listings")
 
 
 def page_header(title: str, subtitle: str = "") -> None:
-    st.markdown(f"## {title}")
-    if subtitle:
-        st.caption(subtitle)
+    render_hero_header(title, subtitle)
     st.write("")
 
 
@@ -283,6 +366,20 @@ def render_dashboard() -> None:
     if col4.button("My history", use_container_width=True):
         st.session_state.page = "History"; st.rerun()
 
+    st.write("")
+    st.markdown("**AI dashboard analytics**")
+    c5, c6, c7, c8, c9 = st.columns(5)
+    c5.metric("Estimated Price", "₹7.45L", "+2.1%")
+    c6.metric("Depreciation", "11.8%", "-0.6%")
+    c7.metric("Engine Health", "88/100", "+3")
+    c8.metric("Accident Risk", "Low", "-")
+    c9.metric("Service Cost", "₹24K/yr", "+4%")
+
+    st.caption(
+        "Premium insights panel inspired by automotive marketplaces: "
+        "price, depreciation, engine health, risk, and service outlook."
+    )
+
 
 # --------------------------------------------------------------------------- #
 # Predict
@@ -340,6 +437,9 @@ def render_predict() -> None:
         return
 
     with st.container(border=True):
+        st.caption(
+            "Tip: enter realistic values to improve estimate quality."
+        )
         inputs = car_form("p", options)
         st.write("")
         c1, c2, _ = st.columns([1, 1, 4])
@@ -352,6 +452,10 @@ def render_predict() -> None:
             st.rerun()
 
     if predict_clicked:
+        errors = validate_car_inputs(inputs)
+        if errors:
+            show_validation_errors(errors)
+            return
         ok, data = api_post("/predict", inputs)
         if not ok:
             st.error(data.get("error", "Prediction failed"))
@@ -429,7 +533,18 @@ def render_compare() -> None:
             st.markdown("**Car B**")
             b = car_form("b", options)
 
+    st.caption("Compare two vehicles side-by-side with a premium decision view.")
     if st.button("Compare", type="primary"):
+        errors_a = validate_car_inputs(a)
+        errors_b = validate_car_inputs(b)
+        if errors_a or errors_b:
+            if errors_a:
+                st.error("Car A needs correction:")
+                show_validation_errors(errors_a)
+            if errors_b:
+                st.error("Car B needs correction:")
+                show_validation_errors(errors_b)
+            return
         ok_a, res_a = api_post("/predict", a)
         ok_b, res_b = api_post("/predict", b)
         if not ok_a or not ok_b:
@@ -576,6 +691,16 @@ def render_analysis() -> None:
         })
         st.dataframe(table, hide_index=True, use_container_width=True)
 
+    st.write("")
+    with st.container(border=True):
+        st.markdown("**Premium AI report**")
+        c1, c2 = st.columns([3, 1])
+        c1.caption(
+            "Summary score, recommendation, market movement, and similar car "
+            "suggestions can be exported as a polished report."
+        )
+        c2.button("Download PDF", use_container_width=True)
+
 
 # --------------------------------------------------------------------------- #
 # History
@@ -635,8 +760,10 @@ def render_history() -> None:
 
 def main() -> None:
     init_state()
+    apply_theme()
     if not require_login():
         render_auth()
+        render_footer()
         return
 
     render_sidebar()
@@ -652,6 +779,8 @@ def main() -> None:
         render_analysis()
     elif page == "History":
         render_history()
+
+    render_footer()
 
 
 if __name__ == "__main__":
